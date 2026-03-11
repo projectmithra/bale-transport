@@ -1,0 +1,45 @@
+{
+  "log": { "level": "debug" },
+  "dns": {
+    "servers": [
+      { "tag": "dns-direct", "address": "1.1.1.1", "detour": "direct" }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "0.0.0.0",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy",
+      "server": "api.edgeflow-routing.com",
+      "server_port": 443,
+      "uuid": "5da57544-ccf2-488a-80c2-68390a08abba",
+      "tls": {
+        "enabled": true,
+        "server_name": "api.edgeflow-routing.com",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        }
+      },
+      "transport": {
+        "type": "bale",
+        "path": "/w",
+        "origin": "https://web.bale.ai"
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  }
+}
