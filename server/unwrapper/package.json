@@ -1,0 +1,12 @@
+{
+  "name": "bale-unwrapper",
+  "version": "1.0.0",
+  "description": "Server-side Bale protobuf decoder for Project Mithra",
+  "main": "unwrapper.js",
+  "scripts": {
+    "start": "node unwrapper.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

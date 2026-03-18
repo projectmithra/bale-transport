@@ -1,0 +1,44 @@
+# docker-compose.yml — Mithra server-side stack
+#
+# Deploy with:
+#   docker compose up -d
+#
+# This runs:
+#   1. bale-unwrapper (port 80) — strips Bale protobuf
+#   2. xray (port 8443) — your proxy server
+#
+# The Cloudflare Worker connects to port 80.
+# bale-unwrapper auto-detects Bale vs legacy connections.
+
+version: '3.8'
+
+services:
+  unwrapper:
+    build:
+      context: ../..
+      dockerfile: server/docker/Dockerfile
+    container_name: bale-unwrapper
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      - BACKEND=ws://xray:8443
+      - BACKEND_PATH=/api/v4/sync/data-stream
+      - VERBOSE=0
+    depends_on:
+      - xray
+    networks:
+      - mithra
+
+  xray:
+    image: teddysun/xray:latest
+    container_name: xray
+    restart: unless-stopped
+    volumes:
+      - ./xray-config.json:/etc/xray/config.json:ro
+    networks:
+      - mithra
+
+networks:
+  mithra:
+    driver: bridge

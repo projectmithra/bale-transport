@@ -359,3 +359,157 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
+
+// ============================================================
+// SERVER ENVELOPE ENCODING (used by unwrapper/Worker)
+// ============================================================
+
+// EncodeHandshakeResponse creates a ServerEnvelope with a HandshakeResponse.
+func EncodeHandshakeResponse() []byte {
+	hs := NewPbWriter()
+	hs.WriteInt32(1, 1) // mkprotoVersion
+	hs.WriteInt32(2, 1) // apiVersion
+	env := NewPbWriter()
+	env.WriteBytes(5, hs.Finish()) // field 5 = handshakeResponse
+	return env.Finish()
+}
+
+// EncodePong creates a ServerEnvelope with a Pong.
+func EncodePong(id int) []byte {
+	pong := NewPbWriter()
+	if id != 0 {
+		pong.WriteTag(1, 0)
+		pong.WriteVarint(uint32(id))
+	}
+	env := NewPbWriter()
+	env.WriteBytes(4, pong.Finish()) // field 4 = pong
+	return env.Finish()
+}
+
+// EncodeResponseEnvelope wraps data in ServerEnvelope { Response { response=data, index=idx } }.
+func EncodeResponseEnvelope(data []byte, index int) []byte {
+	resp := NewPbWriter()
+	if len(data) > 0 {
+		resp.WriteBytes(2, data)
+	}
+	if index != 0 {
+		resp.WriteTag(3, 0)
+		resp.WriteVarint(uint32(index))
+	}
+	env := NewPbWriter()
+	env.WriteBytes(1, resp.Finish())
+	return env.Finish()
+}
+
+// EncodeUpdateEnvelope wraps data in ServerEnvelope { Update { update=data } }.
+func EncodeUpdateEnvelope(data []byte) []byte {
+	upd := NewPbWriter()
+	if len(data) > 0 {
+		upd.WriteBytes(1, data)
+	}
+	env := NewPbWriter()
+	env.WriteBytes(2, upd.Finish())
+	return env.Finish()
+}
+
+// ============================================================
+// CLIENT ENVELOPE DECODING (used by unwrapper/Worker)
+// ============================================================
+
+// ClientEnvelope represents a decoded client-to-server message.
+type ClientEnvelope struct {
+	Type             string // "request", "ping", "handshake", "unknown"
+	Request          []byte
+	Ping             []byte
+	HandshakeRequest []byte
+}
+
+// DecodeClientEnvelope parses a raw ClientEnvelope.
+func DecodeClientEnvelope(data []byte) (*ClientEnvelope, error) {
+	r := NewPbReader(data)
+	env := &ClientEnvelope{Type: "unknown"}
+	for r.HasMore() {
+		tag, err := r.ReadTag()
+		if err != nil {
+			return nil, err
+		}
+		switch tag.FieldNumber {
+		case 1:
+			env.Request, err = r.ReadBytes()
+			env.Type = "request"
+		case 2:
+			env.Ping, err = r.ReadBytes()
+			env.Type = "ping"
+		case 3:
+			env.HandshakeRequest, err = r.ReadBytes()
+			env.Type = "handshake"
+		default:
+			err = r.Skip(tag.WireType)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return env, nil
+}
+
+// DecodedRequest holds the parsed fields from a Request message.
+type DecodedRequest struct {
+	ServiceName string
+	Method      string
+	Payload     []byte
+	Index       int
+}
+
+// DecodeRequest parses a Request message to extract tunnel payload.
+func DecodeRequest(data []byte) (*DecodedRequest, error) {
+	r := NewPbReader(data)
+	req := &DecodedRequest{}
+	for r.HasMore() {
+		tag, err := r.ReadTag()
+		if err != nil {
+			return nil, err
+		}
+		switch tag.FieldNumber {
+		case 1:
+			var s []byte
+			s, err = r.ReadBytes()
+			req.ServiceName = string(s)
+		case 2:
+			var s []byte
+			s, err = r.ReadBytes()
+			req.Method = string(s)
+		case 3:
+			req.Payload, err = r.ReadBytes()
+		case 5:
+			v, e := r.ReadVarint()
+			req.Index = int(v)
+			err = e
+		default:
+			err = r.Skip(tag.WireType)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return req, nil
+}
+
+// DecodePing extracts the ping ID from a Ping message.
+func DecodePing(data []byte) (int, error) {
+	r := NewPbReader(data)
+	for r.HasMore() {
+		tag, err := r.ReadTag()
+		if err != nil {
+			return 0, err
+		}
+		if tag.FieldNumber == 1 {
+			v, err := r.ReadVarint()
+			return int(v), err
+		}
+		if err := r.Skip(tag.WireType); err != nil {
+			return 0, err
+		}
+	}
+	return 0, nil
+}

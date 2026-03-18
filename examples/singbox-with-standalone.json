@@ -1,0 +1,30 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "0.0.0.0",
+      "listen_port": 2080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy",
+      "server": "127.0.0.1",
+      "server_port": 1984,
+      "uuid": "YOUR-UUID-HERE",
+      "tls": { "enabled": false }
+    },
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" }
+  ],
+  "route": {
+    "rules": [
+      { "geosite": ["ir"], "outbound": "direct" },
+      { "geoip": ["ir", "private"], "outbound": "direct" }
+    ],
+    "final": "proxy"
+  }
+}
