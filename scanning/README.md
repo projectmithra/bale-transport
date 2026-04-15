@@ -288,5 +288,5 @@ sample-results/
 - GFW-knocker/MahsaNG — Android V2Ray client with DNSTT and Fragment support
 
 ### License
-MIT — Project Mithra
+
 MIT — Project Mithra
