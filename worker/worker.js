@@ -13,9 +13,9 @@
 // probing resistance.
 // ============================================================
 
-// >>> CONFIGURATION — change this to your origin server <<<
-const TARGET_DOMAIN = '103.241.67.19.traefik.me';
-const BACKEND_PATH = '/api/v4/sync/data-stream';
+// >>> CONFIGURATION — change this to your origin server and backend paths <<<
+const TARGET_DOMAIN = 'xxx.xxx.xx.xx.traefik.me';
+const BACKEND_PATH = "CHANGE THIS TO YOU PREFERRED VARIABLES - EXAMPLES -->" '/versionX/sync/stream';
 
 export default {
   async fetch(request, env) {
