@@ -60,7 +60,7 @@ Identifies Cloudflare IPs shared with Iranian domestic services.
 
 4. **Subnet analysis:** Group by /24 to identify high-concentration ranges.
 
-5. **Worker connectivity test:** Verify each IP routes to a Cloudflare Worker on all 6 TLS ports (443, 8443, 2053, 2083, 2087, 2096).
+5. **Worker connectivity test:** Deploy a Cloudflare Worker that proxies WebSocket to a backend xray server. Verify each discovered IP routes to the Worker on all 6 TLS ports (443, 8443, 2053, 2083, 2087, 2096).
 
 6. **SNI spoofing assessment:** IPs in 188.114.x.x range are often L3-blocked during blackout but may be reachable with SNI spoofing (injecting a fake TLS ClientHello with wrong TCP sequence number).
 
@@ -86,17 +86,17 @@ Vercel routes requests by HTTP Host header, enabling true domain fronting.
    - `nextjs.org` — whitelisted on MCI
    - `vercel.app` — whitelisted on most operators
 
-3. **Domain fronting test:** Connect with SNI=`vercel.com` (whitelisted) and Host=`custom-app.vercel.app` (routes to custom deployment). If the deployment responds, domain fronting is confirmed.
+3. **Domain fronting test:** Connect with a whitelisted SNI (e.g., `vercel.com`) and a Host header pointing to a custom Vercel deployment. If the deployment responds, domain fronting is confirmed.
 
-4. **Transport:** Vercel Edge Middleware proxies to a backend xray server using xhttp `packet-up` mode. WebSocket and httpupgrade are NOT supported by Vercel.
+4. **Transport:** Vercel Edge Middleware can proxy to a backend xray server. Supported transports: xhttp `packet-up` mode. WebSocket and httpupgrade are NOT supported by Vercel's edge runtime.
 
-**Verified working configuration (April 2026):**
+**Example configuration (generalized):**
 ```
 SNI: vercel.com or nextjs.org (whitelisted)
-Host: mithra-vercel.vercel.app (custom deployment)
-IP: 198.169.2.65 (confirmed whitelisted from Iran)
+Host: your-app.vercel.app (custom deployment)
+IP: Any Vercel Anycast IP (e.g., 76.76.21.x, 198.169.x.x)
 Transport: xhttp packet-up
-Backend: Cloud Run xray via Edge Middleware proxy
+Backend: xray server via Edge Middleware proxy
 ```
 
 #### Phase 3: ArvanCloud Cross-Routing
@@ -115,10 +115,11 @@ ArvanCloud is Iran's domestic CDN — its IPs are always whitelisted, even durin
 4. **Operational model:** An operator with an ArvanCloud account registers a domain, points origin to their xray server, enables cloud proxy + HTTPS. Users connect to the ArvanCloud CDN IP with the registered domain's SNI. DPI sees domestic Iranian traffic. The CDN forwards to the xray origin.
 
 **Key findings:**
-- ArvanCloud rejects unknown/unregistered SNIs (connection dropped)
-- Any registered domain works from any ArvanCloud CDN IP (cross-routing confirmed)
+- ArvanCloud cross-routes by SNI across all CDN IPs (any IP serves any registered domain)
+- Unknown/unregistered SNIs are rejected (connection dropped)
 - Registration geo-fencing prevents account creation from outside Iran
-- The working config format: `VLESS+TCP+TLS` to ArvanCloud IP with Iranian domain SNI
+- Working transport: `VLESS+TCP+TLS` to ArvanCloud IP with Iranian domain SNI
+- No xhttp, WebSocket, or other complex transports needed — plain TCP works
 
 #### Phase 4: Google Domain Fronting
 
@@ -151,13 +152,14 @@ DNS tunneling is the most reliable fallback — DNS resolvers are never blocked 
 
 5. **Comprehensive scanning:** Use `findns` tool (github.com/SamNet-dev/findns) with 7,800+ bundled Iranian resolvers for exhaustive discovery.
 
-**DNSTT server setup:**
-- Protocol: NoizDNS (DPI-resistant fork of DNSTT by anonvector)
+**DNSTT server architecture:**
+- Protocol: NoizDNS (DPI-resistant fork of DNSTT by anonvector) or standard DNSTT
 - Server: UDP:53 on a VM with NS delegation (e.g., `t.example.com` → server IP)
-- Backend: Forwards to SSH (port 22) or xray SOCKS5 (port 10800)
+- Backend: Forwards to SSH (port 22) or xray SOCKS5 proxy
 - Throughput: 30–50 KB/s typical (sufficient for messaging, basic browsing)
 
-**Client options:**
+**Client compatibility:**
+
 | Platform | App | DNSTT Mode | Notes |
 |----------|-----|------------|-------|
 | Android | SlipNet | DNSTT/NoizDNS/VayDNS | Built-in DNS scanner, recommended |
@@ -265,7 +267,6 @@ bash mithra-scan.sh 2>&1 | tee scan-results-$(date +%Y%m%d).txt
 ```
 mithra-scan.sh              — Main scanning script (5 phases)
 README.md                   — This methodology document
-Mithra-Start.bat            — Windows one-click SNI spoofing launcher
 sample-results/
   mithra-found-ips.txt       — Cloudflare IP discovery
   mithra-vercel-ips.txt      — Vercel domain fronting IPs
@@ -287,5 +288,5 @@ sample-results/
 - GFW-knocker/MahsaNG — Android V2Ray client with DNSTT and Fragment support
 
 ### License
-
+MIT — Project Mithra
 MIT — Project Mithra
