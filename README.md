@@ -148,3 +148,9 @@ The Bale protobuf codec was reconstructed from Bale's production JavaScript clie
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Related Repositories
+
+- [`open-ip-lane`](https://github.com/projectmithra/open-ip-lane) — Scanning methodology for discovering shared CDN IPs
+- [`cloudflare-worker`](https://github.com/projectmithra/cloudflare-worker) — Cloudflare Worker relay with Bale API camouflage
+- [`hiddify-sing-box-bale`](https://github.com/projectmithra/hiddify-sing-box-bale) — Native SingBox transport integration
