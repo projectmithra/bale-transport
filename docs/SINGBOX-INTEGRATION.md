@@ -21,17 +21,17 @@ Once integrated, any SingBox config can use the Bale transport:
   "outbounds": [
     {
       "type": "vless",
-      "server": "api.edgeflow-routing.com",
+      "server": "your-server-address",
       "server_port": 443,
       "uuid": "your-uuid",
       "tls": {
         "enabled": true,
-        "server_name": "api.edgeflow-routing.com",
+        "server_name": "your-server-name",
         "utls": { "enabled": true, "fingerprint": "chrome" }
       },
       "transport": {
         "type": "bale",
-        "worker_url": "wss://api.edgeflow-routing.com/w",
+        "worker_url": "wss://your-server-address/w",
         "origin": "https://web.bale.ai",
         "path": "/w"
       }
