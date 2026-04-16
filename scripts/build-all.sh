@@ -1,7 +1,7 @@
 #!/bin/bash
-# ============================================================
+# 
 # build-all.sh — Cross-compile bale-transport for all platforms
-# ============================================================
+# 
 set -e
 
 VERSION=${VERSION:-"0.1.0"}
@@ -11,9 +11,7 @@ OUTPUT_DIR="dist"
 mkdir -p "$OUTPUT_DIR"
 
 echo ""
-echo "═══════════════════════════════════════════════════"
 echo "  Mithra · Building bale-transport v${VERSION}"
-echo "═══════════════════════════════════════════════════"
 echo ""
 
 # Run tests first
@@ -42,8 +40,6 @@ GOOS=darwin GOARCH=arm64 go build -ldflags="$LDFLAGS" -o "$OUTPUT_DIR/bale-trans
 echo "  ✓ $OUTPUT_DIR/bale-transport-darwin-arm64"
 
 echo ""
-echo "═══════════════════════════════════════════════════"
 echo "  Build complete. Binaries in $OUTPUT_DIR/"
-echo "═══════════════════════════════════════════════════"
 ls -lh "$OUTPUT_DIR/"
 echo ""
