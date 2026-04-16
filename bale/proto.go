@@ -25,9 +25,9 @@ var Methods = []string{
 	"Send",
 }
 
-// ============================================================
+// 
 // PROTOBUF WRITER
-// ============================================================
+// 
 
 type PbWriter struct {
 	buf []byte
@@ -73,9 +73,9 @@ func (w *PbWriter) Finish() []byte {
 	return w.buf
 }
 
-// ============================================================
+// 
 // PROTOBUF READER
-// ============================================================
+// 
 
 type PbReader struct {
 	buf []byte
@@ -166,9 +166,9 @@ func (r *PbReader) HasMore() bool {
 	return r.pos < len(r.buf)
 }
 
-// ============================================================
+// 
 // BALE MESSAGE ENCODING
-// ============================================================
+// 
 
 func EncodeHandshakeRequest() []byte {
 	hs := NewPbWriter()
@@ -205,9 +205,9 @@ func WrapTunnelData(tunnelBytes []byte, requestIndex int) []byte {
 	return env.Finish()
 }
 
-// ============================================================
+// 
 // SERVER ENVELOPE DECODING
-// ============================================================
+//
 
 type ServerEnvelope struct {
 	Type              string
@@ -309,9 +309,9 @@ func extractFromUpdate(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-// ============================================================
+// 
 // PADDING — Length-prefix scheme
-// ============================================================
+// 
 
 func AddPadding(data []byte) []byte {
 	dataLen := len(data)
@@ -360,9 +360,9 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// ============================================================
+// 
 // SERVER ENVELOPE ENCODING (used by unwrapper/Worker)
-// ============================================================
+// 
 
 // EncodeHandshakeResponse creates a ServerEnvelope with a HandshakeResponse.
 func EncodeHandshakeResponse() []byte {
@@ -412,9 +412,9 @@ func EncodeUpdateEnvelope(data []byte) []byte {
 	return env.Finish()
 }
 
-// ============================================================
+// 
 // CLIENT ENVELOPE DECODING (used by unwrapper/Worker)
-// ============================================================
+// 
 
 // ClientEnvelope represents a decoded client-to-server message.
 type ClientEnvelope struct {
