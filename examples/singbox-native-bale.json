@@ -17,12 +17,12 @@
     {
       "type": "vless",
       "tag": "proxy",
-      "server": "api.edgeflow-routing.com",
+      "server": "your-server-address",
       "server_port": 443,
-      "uuid": "5da57544-ccf2-488a-80c2-68390a08abba",
+      "uuid": "your-uuid",
       "tls": {
         "enabled": true,
-        "server_name": "api.edgeflow-routing.com",
+        "server_name": "your-server-address",
         "utls": {
           "enabled": true,
           "fingerprint": "chrome"
