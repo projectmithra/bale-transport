@@ -1,10 +1,13 @@
 package bale
 
 import (
+	"crypto/rand"
 	"encoding/binary"
-	"math/rand"
+	mathrand "math/rand"
 )
 
+// Services is the set of real Bale gRPC service names used in request camouflage.
+// The same names appear in legitimate Bale web client traffic.
 var Services = []string{
 	"bale.v1.Configs",
 	"bale.users.v1.Users",
@@ -16,6 +19,7 @@ var Services = []string{
 	"ai.bale.pushak.Push",
 }
 
+// Methods is the set of real Bale gRPC method names used in request camouflage.
 var Methods = []string{
 	"GetParameters",
 	"GetContacts",
@@ -25,18 +29,28 @@ var Methods = []string{
 	"Send",
 }
 
-// 
-// PROTOBUF WRITER
-// 
+// MaxPayloadSize is the hard cap on a single wrapped tunnel payload (4 MiB).
+// Payloads larger than this must be chunked by the caller. The length prefix
+// is a 4-byte big-endian uint32, giving theoretical headroom to 4 GiB, but
+// we cap well below that to keep framing efficient and DoS-resistant.
+const MaxPayloadSize = 4 * 1024 * 1024
 
+// ----------------------------------------------------------------------------
+// PROTOBUF WRITER
+// ----------------------------------------------------------------------------
+
+// PbWriter is a minimal protobuf encoder matching the subset of the wire format
+// that Bale's production client uses.
 type PbWriter struct {
 	buf []byte
 }
 
+// NewPbWriter returns an empty writer with a small starting capacity.
 func NewPbWriter() *PbWriter {
 	return &PbWriter{buf: make([]byte, 0, 256)}
 }
 
+// WriteVarint appends a protobuf varint.
 func (w *PbWriter) WriteVarint(v uint32) *PbWriter {
 	for v > 0x7F {
 		w.buf = append(w.buf, byte(v&0x7F)|0x80)
@@ -46,10 +60,12 @@ func (w *PbWriter) WriteVarint(v uint32) *PbWriter {
 	return w
 }
 
+// WriteTag appends a protobuf tag (field number + wire type).
 func (w *PbWriter) WriteTag(fieldNumber int, wireType int) *PbWriter {
 	return w.WriteVarint(uint32((fieldNumber << 3) | wireType))
 }
 
+// WriteBytes appends a length-delimited byte field (wire type 2).
 func (w *PbWriter) WriteBytes(fieldNumber int, data []byte) *PbWriter {
 	w.WriteTag(fieldNumber, 2)
 	w.WriteVarint(uint32(len(data)))
@@ -57,10 +73,13 @@ func (w *PbWriter) WriteBytes(fieldNumber int, data []byte) *PbWriter {
 	return w
 }
 
+// WriteString appends a length-delimited string field (wire type 2).
 func (w *PbWriter) WriteString(fieldNumber int, s string) *PbWriter {
 	return w.WriteBytes(fieldNumber, []byte(s))
 }
 
+// WriteInt32 appends a varint field (wire type 0). Skipped when v == 0
+// to match protobuf's default-value omission behaviour.
 func (w *PbWriter) WriteInt32(fieldNumber int, v int) *PbWriter {
 	if v != 0 {
 		w.WriteTag(fieldNumber, 0)
@@ -69,28 +88,35 @@ func (w *PbWriter) WriteInt32(fieldNumber int, v int) *PbWriter {
 	return w
 }
 
+// Finish returns the encoded byte slice. The returned slice shares backing
+// memory with the writer and must not be modified by the caller.
 func (w *PbWriter) Finish() []byte {
 	return w.buf
 }
 
-// 
+// ----------------------------------------------------------------------------
 // PROTOBUF READER
-// 
+// ----------------------------------------------------------------------------
 
+// PbReader is a minimal protobuf decoder that tracks a position within a
+// fixed input buffer.
 type PbReader struct {
 	buf []byte
 	pos int
 }
 
+// NewPbReader returns a reader positioned at the start of data.
 func NewPbReader(data []byte) *PbReader {
 	return &PbReader{buf: data, pos: 0}
 }
 
+// Tag is the decoded representation of a protobuf field tag.
 type Tag struct {
 	FieldNumber int
 	WireType    int
 }
 
+// ReadVarint reads and returns a protobuf varint.
 func (r *PbReader) ReadVarint() (uint32, error) {
 	var result uint32
 	var shift uint
@@ -109,6 +135,7 @@ func (r *PbReader) ReadVarint() (uint32, error) {
 	return 0, ErrUnexpectedEnd
 }
 
+// ReadTag reads a protobuf field tag.
 func (r *PbReader) ReadTag() (Tag, error) {
 	v, err := r.ReadVarint()
 	if err != nil {
@@ -120,6 +147,8 @@ func (r *PbReader) ReadTag() (Tag, error) {
 	}, nil
 }
 
+// ReadBytes reads a length-delimited byte slice (wire type 2). The returned
+// slice is a copy, so the caller is free to retain it.
 func (r *PbReader) ReadBytes() ([]byte, error) {
 	length, err := r.ReadVarint()
 	if err != nil {
@@ -134,6 +163,7 @@ func (r *PbReader) ReadBytes() ([]byte, error) {
 	return data, nil
 }
 
+// Skip advances past a single field given its wire type.
 func (r *PbReader) Skip(wireType int) error {
 	switch wireType {
 	case 0:
@@ -150,6 +180,9 @@ func (r *PbReader) Skip(wireType int) error {
 		if err != nil {
 			return err
 		}
+		if r.pos+int(length) > len(r.buf) {
+			return ErrUnexpectedEnd
+		}
 		r.pos += int(length)
 		return nil
 	case 5:
@@ -162,14 +195,16 @@ func (r *PbReader) Skip(wireType int) error {
 	return ErrUnknownWireType
 }
 
+// HasMore reports whether any bytes remain.
 func (r *PbReader) HasMore() bool {
 	return r.pos < len(r.buf)
 }
 
-// 
+// ----------------------------------------------------------------------------
 // BALE MESSAGE ENCODING
-// 
+// ----------------------------------------------------------------------------
 
+// EncodeHandshakeRequest builds a ClientEnvelope { HandshakeRequest { mkprotoVersion=1, apiVersion=1 } }.
 func EncodeHandshakeRequest() []byte {
 	hs := NewPbWriter()
 	hs.WriteInt32(1, 1)
@@ -179,6 +214,7 @@ func EncodeHandshakeRequest() []byte {
 	return env.Finish()
 }
 
+// EncodePing builds a ClientEnvelope { Ping { id } }.
 func EncodePing(id int) []byte {
 	ping := NewPbWriter()
 	if id != 0 {
@@ -190,7 +226,14 @@ func EncodePing(id int) []byte {
 	return env.Finish()
 }
 
+// WrapTunnelData wraps raw tunnel bytes inside a Bale Request envelope that
+// looks like a legitimate gRPC call (service name + method + payload + index).
+// Oversize inputs (> MaxPayloadSize) are truncated; the caller is responsible
+// for chunking large payloads before calling this function.
 func WrapTunnelData(tunnelBytes []byte, requestIndex int) []byte {
+	if len(tunnelBytes) > MaxPayloadSize {
+		tunnelBytes = tunnelBytes[:MaxPayloadSize]
+	}
 	service := Services[requestIndex%len(Services)]
 	method := Methods[requestIndex%len(Methods)]
 	padded := AddPadding(tunnelBytes)
@@ -205,10 +248,11 @@ func WrapTunnelData(tunnelBytes []byte, requestIndex int) []byte {
 	return env.Finish()
 }
 
-// 
+// ----------------------------------------------------------------------------
 // SERVER ENVELOPE DECODING
-//
+// ----------------------------------------------------------------------------
 
+// ServerEnvelope is a decoded server-to-client message.
 type ServerEnvelope struct {
 	Type              string
 	Response          []byte
@@ -217,6 +261,7 @@ type ServerEnvelope struct {
 	HandshakeResponse []byte
 }
 
+// DecodeServerEnvelope parses a raw ServerEnvelope.
 func DecodeServerEnvelope(data []byte) (*ServerEnvelope, error) {
 	r := NewPbReader(data)
 	env := &ServerEnvelope{Type: "unknown"}
@@ -251,6 +296,7 @@ func DecodeServerEnvelope(data []byte) (*ServerEnvelope, error) {
 	return env, nil
 }
 
+// ExtractPayload returns the tunnel payload inside a Response or Update envelope.
 func ExtractPayload(env *ServerEnvelope) ([]byte, error) {
 	switch env.Type {
 	case "response":
@@ -267,6 +313,9 @@ func ExtractPayload(env *ServerEnvelope) ([]byte, error) {
 	return nil, nil
 }
 
+// extractFromResponse pulls the payload bytes out of a Response message.
+// Bale places the tunnel bytes at field number 2; field number 3 is an
+// integer index we deliberately ignore on the client side.
 func extractFromResponse(data []byte) ([]byte, error) {
 	r := NewPbReader(data)
 	var payload []byte
@@ -276,8 +325,6 @@ func extractFromResponse(data []byte) ([]byte, error) {
 			return nil, err
 		}
 		switch tag.FieldNumber {
-		case 1:
-			payload, err = r.ReadBytes()
 		case 2:
 			payload, err = r.ReadBytes()
 		case 3:
@@ -292,6 +339,7 @@ func extractFromResponse(data []byte) ([]byte, error) {
 	return payload, nil
 }
 
+// extractFromUpdate pulls the payload bytes out of an Update message.
 func extractFromUpdate(data []byte) ([]byte, error) {
 	r := NewPbReader(data)
 	for r.HasMore() {
@@ -309,48 +357,70 @@ func extractFromUpdate(data []byte) ([]byte, error) {
 	return nil, nil
 }
 
-// 
-// PADDING — Length-prefix scheme
-// 
+// ----------------------------------------------------------------------------
+// PADDING — 4-byte length-prefix scheme
+// ----------------------------------------------------------------------------
+//
+// Encoded layout:  [uint32_be real_length] [real_data...] [random_padding...]
+//
+// The uint32 prefix supports payloads up to 4 GiB (the caller-enforced cap is
+// MaxPayloadSize = 4 MiB). The random padding bytes come from crypto/rand for
+// traffic-analysis resistance; the target-size jitter can continue to use
+// math/rand since it is only a length-distribution obfuscator, not a secret.
 
+const paddingLenPrefix = 4
+
+// AddPadding prepends a 4-byte big-endian length header and appends random
+// padding to obfuscate the true payload length distribution.
 func AddPadding(data []byte) []byte {
 	dataLen := len(data)
 	var targetSize int
 	switch {
 	case dataLen < 50:
-		targetSize = 50 + rand.Intn(150)
+		targetSize = 50 + mathrand.Intn(150)
 	case dataLen < 500:
-		targetSize = maxInt(dataLen, 200) + rand.Intn(300)
+		targetSize = maxInt(dataLen, 200) + mathrand.Intn(300)
 	case dataLen < 4096:
-		targetSize = dataLen + rand.Intn(512)
+		targetSize = dataLen + mathrand.Intn(512)
 	default:
-		targetSize = dataLen + rand.Intn(64)
+		targetSize = dataLen + mathrand.Intn(64)
 	}
-	if targetSize <= dataLen {
-		result := make([]byte, 2+dataLen)
-		binary.BigEndian.PutUint16(result[0:2], uint16(dataLen))
-		copy(result[2:], data)
-		return result
+	if targetSize < dataLen {
+		targetSize = dataLen
 	}
 	paddingLen := targetSize - dataLen
-	result := make([]byte, 2+dataLen+paddingLen)
-	binary.BigEndian.PutUint16(result[0:2], uint16(dataLen))
-	copy(result[2:], data)
-	for i := 2 + dataLen; i < len(result); i++ {
-		result[i] = byte(rand.Intn(256))
+	result := make([]byte, paddingLenPrefix+dataLen+paddingLen)
+	binary.BigEndian.PutUint32(result[0:paddingLenPrefix], uint32(dataLen))
+	copy(result[paddingLenPrefix:], data)
+	if paddingLen > 0 {
+		// crypto/rand for the padding bytes themselves — resists
+		// statistical analysis on padding content.
+		if _, err := rand.Read(result[paddingLenPrefix+dataLen:]); err != nil {
+			// Fallback to math/rand on the (theoretical) crypto/rand
+			// failure — obfuscation padding is not cryptographically
+			// critical, and leaving the bytes zeroed would leak
+			// information. This path is effectively unreachable on
+			// supported platforms.
+			for i := paddingLenPrefix + dataLen; i < len(result); i++ {
+				result[i] = byte(mathrand.Intn(256))
+			}
+		}
 	}
 	return result
 }
 
+// StripPadding reverses AddPadding. On malformed input (too short, or a stated
+// length that exceeds the buffer) it returns the input unchanged so that the
+// caller can observe the anomaly rather than crashing the reader loop.
 func StripPadding(data []byte) []byte {
-	if len(data) < 2 {
+	if len(data) < paddingLenPrefix {
 		return data
 	}
-	realLen := int(binary.BigEndian.Uint16(data[0:2]))
-	if realLen+2 > len(data) {
+	realLen := int(binary.BigEndian.Uint32(data[0:paddingLenPrefix]))
+	if realLen < 0 || realLen+paddingLenPrefix > len(data) {
 		return data
 	}
-	return data[2 : 2+realLen]
+	return data[paddingLenPrefix : paddingLenPrefix+realLen]
 }
 
 func maxInt(a, b int) int {
@@ -360,11 +430,11 @@ func maxInt(a, b int) int {
 	return b
 }
 
-// 
-// SERVER ENVELOPE ENCODING (used by unwrapper/Worker)
-// 
+// ----------------------------------------------------------------------------
+// SERVER ENVELOPE ENCODING (used by unwrapper / Worker)
+// ----------------------------------------------------------------------------
 
-// EncodeHandshakeResponse creates a ServerEnvelope with a HandshakeResponse.
+// EncodeHandshakeResponse builds a ServerEnvelope { HandshakeResponse { ... } }.
 func EncodeHandshakeResponse() []byte {
 	hs := NewPbWriter()
 	hs.WriteInt32(1, 1) // mkprotoVersion
@@ -374,7 +444,7 @@ func EncodeHandshakeResponse() []byte {
 	return env.Finish()
 }
 
-// EncodePong creates a ServerEnvelope with a Pong.
+// EncodePong builds a ServerEnvelope { Pong { id } }.
 func EncodePong(id int) []byte {
 	pong := NewPbWriter()
 	if id != 0 {
@@ -386,7 +456,7 @@ func EncodePong(id int) []byte {
 	return env.Finish()
 }
 
-// EncodeResponseEnvelope wraps data in ServerEnvelope { Response { response=data, index=idx } }.
+// EncodeResponseEnvelope builds a ServerEnvelope { Response { response=data, index=idx } }.
 func EncodeResponseEnvelope(data []byte, index int) []byte {
 	resp := NewPbWriter()
 	if len(data) > 0 {
@@ -401,7 +471,7 @@ func EncodeResponseEnvelope(data []byte, index int) []byte {
 	return env.Finish()
 }
 
-// EncodeUpdateEnvelope wraps data in ServerEnvelope { Update { update=data } }.
+// EncodeUpdateEnvelope builds a ServerEnvelope { Update { update=data } }.
 func EncodeUpdateEnvelope(data []byte) []byte {
 	upd := NewPbWriter()
 	if len(data) > 0 {
@@ -412,11 +482,11 @@ func EncodeUpdateEnvelope(data []byte) []byte {
 	return env.Finish()
 }
 
-// 
-// CLIENT ENVELOPE DECODING (used by unwrapper/Worker)
-// 
+// ----------------------------------------------------------------------------
+// CLIENT ENVELOPE DECODING (used by unwrapper / Worker)
+// ----------------------------------------------------------------------------
 
-// ClientEnvelope represents a decoded client-to-server message.
+// ClientEnvelope is a decoded client-to-server message.
 type ClientEnvelope struct {
 	Type             string // "request", "ping", "handshake", "unknown"
 	Request          []byte
@@ -461,7 +531,7 @@ type DecodedRequest struct {
 	Index       int
 }
 
-// DecodeRequest parses a Request message to extract tunnel payload.
+// DecodeRequest parses a Request message to extract the tunnel payload.
 func DecodeRequest(data []byte) (*DecodedRequest, error) {
 	r := NewPbReader(data)
 	req := &DecodedRequest{}
