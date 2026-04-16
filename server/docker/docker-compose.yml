@@ -5,12 +5,13 @@
 #
 # This runs:
 #   1. bale-unwrapper (port 80) — strips Bale protobuf
-#   2. xray (port 8443) — your proxy server
+#   2. xray (port 8443, internal only) — your proxy server
 #
-# The Cloudflare Worker connects to port 80.
+# The Cloudflare Worker connects to port 80 on this host.
 # bale-unwrapper auto-detects Bale vs legacy connections.
-
-version: '3.8'
+#
+# Note: the top-level `version:` key is intentionally omitted —
+# Docker Compose v2 ignores it and emits a deprecation warning.
 
 services:
   unwrapper:
@@ -25,6 +26,14 @@ services:
       - BACKEND=ws://xray:8443
       - BACKEND_PATH=/api/v4/sync/data-stream
       - VERBOSE=0
+      - IDLE_TIMEOUT_MS=120000
+      - MAX_BUFFERED_BYTES=4194304
+      - MAX_PAYLOAD_SIZE=4194304
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       - xray
     networks:
@@ -36,6 +45,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./xray-config.json:/etc/xray/config.json:ro
+    # xray is not exposed to the host — only the unwrapper talks to it
+    # over the internal `mithra` bridge network.
     networks:
       - mithra
 
