@@ -2,7 +2,7 @@
 
 **Protocol mimicry transport layer for censorship circumvention.**
 
-Wraps tunnel traffic inside [Bale messenger](https://bale.ai)'s exact protobuf wire format. Iran's DPI sees what looks like a legitimate Bale session — protobuf envelopes, real service names, proper handshake sequence, padded frame sizes, and Bale-timed keepalive pings.
+Wraps tunnel traffic inside [Bale messenger](https://bale.ai)'s exact protobuf wire format. DPI sees what looks like a legitimate Bale session — protobuf envelopes, real service names, proper handshake sequence, padded frame sizes, and Bale-timed keepalive pings.
 
 Part of [Project Mithra](https://github.com/projectmithra) — infrastructure mimicry for the circumvention ecosystem.
 
@@ -10,7 +10,7 @@ Part of [Project Mithra](https://github.com/projectmithra) — infrastructure mi
 
 Two independent evasion layers:
 
-1. **Open IP Lane** (routing) — Traffic routes through Cloudflare IPs shared with whitelisted Iranian financial services. DPI sees traffic going to a financial service address.
+1. **Open IP Lane** (routing) — Traffic routes through Cloudflare IPs shared with whitelisted Iranian financial services. DPI sees traffic going to a financial service address. See [`open-ip-lane`](https://github.com/projectmithra/open-ip-lane) for the scanning methodology that discovers these IPs.
 
 2. **Bale Protocol Mimicry** (content) — Every WebSocket frame is a valid Bale protobuf envelope. The connection begins with Bale's handshake, carries data inside `ClientEnvelope`/`ServerEnvelope` structures with real Bale gRPC service names, and maintains keepalive at Bale's exact interval.
 
@@ -20,15 +20,15 @@ These layers are independent — the routing disguise and the content disguise s
 
 ```
 User's Proxy Client (Hiddify / V2RayNG / Nekobox / Outline)
-  │ plain TCP to localhost:1984
+  │ plain TCP
   ▼
-Bale Transport (standalone binary or native SingBox transport)
-  │ WSS with Bale protobuf to Cloudflare
+Bale Transport (native SingBox transport via patches)
+  │ WSS with Bale protobuf to CDN edge
   ▼
-Cloudflare Worker (strips protobuf, active probing resistance)
+CDN Edge Relay (see cloudflare-worker repo)
   │ WSS to origin server
   ▼
-bale-unwrapper (Node.js, auto-detects Bale vs legacy)
+bale-unwrapper (Node.js, server-side)
   │ raw tunnel data
   ▼
 Xray / SingBox Server → Open Internet
@@ -36,23 +36,11 @@ Xray / SingBox Server → Open Internet
 
 ## Quick Start
 
-### Option 1: Standalone Binary (works with any proxy client)
-
-```bash
-# Build
-go build -o bale-transport ./cmd/bale-transport/
-
-# Run
-./bale-transport -worker wss://your-worker.com/w -v
-
-# Point your proxy client at 127.0.0.1:1984
-```
-
-### Option 2: Native SingBox Transport
+### Native SingBox Transport
 
 Use `"type": "bale"` in your SingBox config's transport section. See [examples/singbox-native-bale.json](examples/singbox-native-bale.json).
 
-Requires a SingBox build with the Bale transport compiled in. See [docs/SINGBOX-INTEGRATION.md](docs/SINGBOX-INTEGRATION.md).
+Requires a SingBox build with the Bale transport compiled in via the patches in [`patches/`](patches/). See [docs/SINGBOX-INTEGRATION.md](docs/SINGBOX-INTEGRATION.md) for build instructions.
 
 ### Server Setup (Docker)
 
@@ -65,7 +53,9 @@ cd server/docker
 docker compose up -d
 ```
 
-This starts the `bale-unwrapper` on port 80 and Xray on port 8443. Point your Cloudflare Worker at port 80.
+This starts the `bale-unwrapper` on port 80 and Xray on port 8443. Point your CDN edge relay at port 80.
+
+For the CDN edge relay, see the [`cloudflare-worker`](https://github.com/projectmithra/cloudflare-worker) repo.
 
 ## Repository Structure
 
@@ -75,15 +65,13 @@ bale-transport/
 │   ├── proto.go                   # Encoder/decoder + padding
 │   ├── proto_test.go              # Comprehensive tests
 │   └── errors.go                  # Error definitions
-├── cmd/
-│   └── bale-transport/
-│       └── main.go                # Standalone binary
 ├── transport/
-│   └── v2raybale/                 # Native SingBox transport
-│       ├── client.go              # SingBox adapter.V2RayClientTransport
-│       └── conn.go                # net.Conn over Bale-wrapped WebSocket
-├── worker/
-│   └── worker.js                  # Cloudflare Worker
+│   └── v2raybale/
+│       └── client.go              # SingBox adapter.V2RayClientTransport
+├── patches/                       # Patches for SingBox integration
+│   ├── patched-transport.go
+│   ├── patched-v2ray-constant.go
+│   └── v2ray_bale.go
 ├── server/
 │   ├── unwrapper/
 │   │   ├── unwrapper.js           # Node.js bale-unwrapper
@@ -93,8 +81,14 @@ bale-transport/
 │       ├── docker-compose.yml
 │       └── xray-config.json
 ├── examples/                      # Ready-to-use configs
-├── scripts/                       # Build & deployment scripts
+│   ├── singbox-native-bale.json
+│   └── singbox-with-standalone.json
+├── scripts/                       # Build scripts
+│   └── build-all.sh
 ├── docs/                          # Integration guides
+│   └── SINGBOX-INTEGRATION.md
+├── go.mod
+├── LICENSE
 └── README.md
 ```
 
@@ -103,9 +97,7 @@ bale-transport/
 | Tool | Integration | Effort |
 |------|------------|--------|
 | Hiddify / SingBox | Native transport: `"type": "bale"` | PR merge + rebuild |
-| V2RayNG / MasaNG | Standalone binary + VLESS TCP config | Binary + config |
-| Self-hosted V2Ray | Standalone binary + server unwrapper | Tutorial + binary |
-| Outline | Standalone binary as middleware | Config + guide |
+| Self-hosted | SingBox patches + server unwrapper | Patches + server |
 
 ## What DPI Sees
 
@@ -134,16 +126,13 @@ go test ./bale/ -v -bench=.
 ## Building
 
 ```bash
-# Single platform
-go build -o bale-transport ./cmd/bale-transport/
-
-# All platforms
+# Build all components
 bash scripts/build-all.sh
 ```
 
 ## Security
 
-The Bale protobuf codec was reconstructed from Bale's production JavaScript client (`beta.bale.ai/static/js/index.f68af2e0.js`). The padding scheme uses deterministic length-prefix encoding (`uint16_be` + data + random) — not marker-byte scanning — to prevent data corruption from payload bytes colliding with the padding delimiter.
+The Bale protobuf codec was reconstructed from Bale's production JavaScript client. The padding scheme uses deterministic length-prefix encoding (`uint16_be` + data + random) — not marker-byte scanning — to prevent data corruption from payload bytes colliding with the padding delimiter.
 
 ## License
 
