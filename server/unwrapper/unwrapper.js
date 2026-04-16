@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ============================================================
+// 
 // bale-unwrapper — Server-side Bale protobuf decoder
 //
 // Accepts WebSocket connections on port 80 (or PORT env).
@@ -10,111 +10,185 @@
 // Usage:
 //   BACKEND=ws://127.0.0.1:8443 node unwrapper.js
 //   BACKEND=ws://127.0.0.1:8443 PORT=8080 node unwrapper.js
-// ============================================================
+// 
+
+'use strict';
 
 const http = require('http');
+const crypto = require('crypto');
 const { WebSocket, WebSocketServer } = require('ws');
 
-const PORT = parseInt(process.env.PORT || '80');
+const PORT = parseInt(process.env.PORT || '80', 10);
 const BACKEND = process.env.BACKEND || 'ws://127.0.0.1:8443';
 const BACKEND_PATH = process.env.BACKEND_PATH || '/api/v4/sync/data-stream';
 const VERBOSE = process.env.VERBOSE === '1';
 
-// ============================================================
+// Resource limits — tune via env if needed.
+const IDLE_TIMEOUT_MS = parseInt(process.env.IDLE_TIMEOUT_MS || '120000', 10); // 120s
+const MAX_BUFFERED_BYTES = parseInt(process.env.MAX_BUFFERED_BYTES || '4194304', 10); // 4 MiB
+const MAX_PAYLOAD_SIZE = parseInt(process.env.MAX_PAYLOAD_SIZE || '4194304', 10); // 4 MiB
+const MAX_FRAME_SIZE = parseInt(process.env.MAX_FRAME_SIZE || '16777216', 10); // 16 MiB
+
+const PADDING_PREFIX = 4; // 4-byte uint32 big-endian length header
+
+// 
 // PROTOBUF CODEC (matches Go bale/ package exactly)
-// ============================================================
+// 
 
 class PbReader {
   constructor(buf) {
     this.buf = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
     this.pos = 0;
   }
+
+  // readVarint uses Number arithmetic (multiplication) instead of bitwise
+  // left-shift so values with shift >= 25 are not silently truncated by
+  // JavaScript's 32-bit bitwise semantics. Varints up to 2^53-1 decode
+  // correctly; longer encodings throw.
   readVarint() {
-    let r = 0, s = 0;
+    let result = 0;
+    let multiplier = 1;
+    let bytes = 0;
     while (this.pos < this.buf.length) {
       const b = this.buf[this.pos++];
-      r |= (b & 0x7f) << s;
-      if ((b & 0x80) === 0) return r >>> 0;
-      s += 7;
-      if (s > 35) throw new Error('Varint too long');
+      result += (b & 0x7f) * multiplier;
+      bytes++;
+      if ((b & 0x80) === 0) {
+        if (!Number.isSafeInteger(result)) {
+          throw new Error('Varint exceeds safe integer range');
+        }
+        return result;
+      }
+      if (bytes >= 5) {
+        // 5 bytes is sufficient for any uint32 field we use; beyond this
+        // is malformed for our subset of the wire format.
+        throw new Error('Varint too long');
+      }
+      multiplier *= 128;
     }
-    throw new Error('Unexpected end');
+    throw new Error('Unexpected end of varint');
   }
+
   readTag() {
     const t = this.readVarint();
     return { fieldNumber: t >>> 3, wireType: t & 0x07 };
   }
+
   readBytes() {
     const len = this.readVarint();
+    if (len < 0 || this.pos + len > this.buf.length) {
+      throw new Error('readBytes length out of range');
+    }
     const bytes = this.buf.slice(this.pos, this.pos + len);
     this.pos += len;
     return bytes;
   }
-  readString() { return this.readBytes().toString('utf8'); }
+
+  readString() {
+    return this.readBytes().toString('utf8');
+  }
+
   skip(wt) {
     switch (wt) {
       case 0: this.readVarint(); break;
       case 1: this.pos += 8; break;
-      case 2: this.pos += this.readVarint(); break;
+      case 2: {
+        const len = this.readVarint();
+        if (this.pos + len > this.buf.length) throw new Error('skip length-delimited out of range');
+        this.pos += len;
+        break;
+      }
       case 5: this.pos += 4; break;
       default: throw new Error(`Unknown wire type: ${wt}`);
     }
   }
-  hasMore() { return this.pos < this.buf.length; }
+
+  hasMore() {
+    return this.pos < this.buf.length;
+  }
 }
 
 class PbWriter {
   constructor() { this.chunks = []; }
+
   writeVarint(v) {
+    if (v < 0 || !Number.isSafeInteger(v)) {
+      throw new Error('writeVarint: value out of range');
+    }
     const buf = [];
-    v = v >>> 0;
-    while (v > 0x7f) { buf.push((v & 0x7f) | 0x80); v >>>= 7; }
+    while (v > 0x7f) {
+      buf.push((v & 0x7f) | 0x80);
+      v = Math.floor(v / 128);
+    }
     buf.push(v & 0x7f);
     this.chunks.push(Buffer.from(buf));
     return this;
   }
-  writeTag(fn, wt) { return this.writeVarint((fn << 3) | wt); }
+
+  writeTag(fn, wt) {
+    return this.writeVarint((fn << 3) | wt);
+  }
+
   writeBytes(fn, data) {
     this.writeTag(fn, 2);
     this.writeVarint(data.length);
     this.chunks.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
     return this;
   }
+
   writeInt32(fn, v) {
-    if (v !== 0) { this.writeTag(fn, 0); this.writeVarint(v); }
+    if (v !== 0) {
+      this.writeTag(fn, 0);
+      this.writeVarint(v);
+    }
     return this;
   }
-  finish() { return Buffer.concat(this.chunks); }
+
+  finish() {
+    return Buffer.concat(this.chunks);
+  }
 }
 
-// Length-prefix padding (unified with Go client and Worker)
+// 
+// PADDING — 4-byte length prefix, crypto-random padding bytes
+// (unified with Go client and Cloudflare Worker)
+// 
+
 function addPadding(data) {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
   const dataLen = buf.length;
+  if (dataLen > MAX_PAYLOAD_SIZE) {
+    throw new Error(`payload exceeds MAX_PAYLOAD_SIZE (${dataLen} > ${MAX_PAYLOAD_SIZE})`);
+  }
+
   let targetSize;
   if (dataLen < 50) targetSize = 50 + Math.floor(Math.random() * 150);
   else if (dataLen < 500) targetSize = Math.max(dataLen, 200) + Math.floor(Math.random() * 300);
   else if (dataLen < 4096) targetSize = dataLen + Math.floor(Math.random() * 512);
   else targetSize = dataLen + Math.floor(Math.random() * 64);
-
   if (targetSize < dataLen) targetSize = dataLen;
+
   const paddingLen = targetSize - dataLen;
-  const result = Buffer.alloc(2 + dataLen + paddingLen);
-  result.writeUInt16BE(dataLen, 0);
-  buf.copy(result, 2);
-  for (let i = 2 + dataLen; i < result.length; i++) {
-    result[i] = Math.floor(Math.random() * 256);
+  const result = Buffer.alloc(PADDING_PREFIX + dataLen + paddingLen);
+  result.writeUInt32BE(dataLen, 0);
+  buf.copy(result, PADDING_PREFIX);
+  if (paddingLen > 0) {
+    crypto.randomFillSync(result, PADDING_PREFIX + dataLen, paddingLen);
   }
   return result;
 }
 
 function stripPadding(data) {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  if (buf.length < 2) return buf;
-  const realLen = buf.readUInt16BE(0);
-  if (realLen + 2 > buf.length) return buf;
-  return buf.slice(2, 2 + realLen);
+  if (buf.length < PADDING_PREFIX) return buf;
+  const realLen = buf.readUInt32BE(0);
+  if (realLen + PADDING_PREFIX > buf.length) return buf;
+  return buf.slice(PADDING_PREFIX, PADDING_PREFIX + realLen);
 }
+
+// 
+// ENVELOPE DECODE / ENCODE
+// 
 
 function decodeClientEnvelope(buffer) {
   const r = new PbReader(buffer);
@@ -160,39 +234,71 @@ function decodePing(buffer) {
 }
 
 function encodeHandshakeResponse() {
-  const inner = new PbWriter(); inner.writeInt32(1, 1); inner.writeInt32(2, 1);
-  const w = new PbWriter(); w.writeBytes(5, inner.finish());
+  const inner = new PbWriter();
+  inner.writeInt32(1, 1);
+  inner.writeInt32(2, 1);
+  const w = new PbWriter();
+  w.writeBytes(5, inner.finish());
   return w.finish();
 }
 
 function encodePong(id) {
   const inner = new PbWriter();
-  if (id !== 0) { inner.writeTag(1, 0); inner.writeVarint(id); }
-  const w = new PbWriter(); w.writeBytes(4, inner.finish());
+  if (id !== 0) {
+    inner.writeTag(1, 0);
+    inner.writeVarint(id);
+  }
+  const w = new PbWriter();
+  w.writeBytes(4, inner.finish());
   return w.finish();
 }
 
 function encodeResponseEnvelope(data, index) {
   const resp = new PbWriter();
   if (data && data.length > 0) resp.writeBytes(2, data);
-  if (index) { resp.writeTag(3, 0); resp.writeVarint(index); }
-  const w = new PbWriter(); w.writeBytes(1, resp.finish());
+  if (index) {
+    resp.writeTag(3, 0);
+    resp.writeVarint(index);
+  }
+  const w = new PbWriter();
+  w.writeBytes(1, resp.finish());
   return w.finish();
 }
 
 function encodeUpdateEnvelope(data) {
   const upd = new PbWriter();
   if (data && data.length > 0) upd.writeBytes(1, data);
-  const w = new PbWriter(); w.writeBytes(2, upd.finish());
+  const w = new PbWriter();
+  w.writeBytes(2, upd.finish());
   return w.finish();
 }
 
-// ============================================================
+// 
+// SEND HELPERS — apply backpressure and size limits
+// 
+
+function safeSend(socket, data, label) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+  if (socket.bufferedAmount > MAX_BUFFERED_BYTES) {
+    console.error(`${label} backpressure: bufferedAmount=${socket.bufferedAmount} > ${MAX_BUFFERED_BYTES}, closing`);
+    try { socket.close(1013, 'backpressure'); } catch (_) { /* ignore */ }
+    return false;
+  }
+  try {
+    socket.send(data);
+    return true;
+  } catch (err) {
+    console.error(`${label} send error: ${err.message}`);
+    return false;
+  }
+}
+
+// 
 // SERVER
-// ============================================================
+// 
 
 const server = http.createServer((req, res) => {
-  // HTTP responses for active probing resistance
+  // Active-probing response: mimic Bale's public-facing HTTP response.
   res.setHeader('Server', 'nginx/1.25.3');
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
@@ -200,7 +306,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200);
     res.end(JSON.stringify({
       ok: true,
-      result: { version: '5.4.2', apiVersion: 1, mkprotoVersion: 1, serverTime: Date.now() }
+      result: { version: '5.4.2', apiVersion: 1, mkprotoVersion: 1, serverTime: Date.now() },
     }));
   } else {
     res.writeHead(404);
@@ -208,20 +314,44 @@ const server = http.createServer((req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ server, path: BACKEND_PATH });
+const wss = new WebSocketServer({
+  server,
+  path: BACKEND_PATH,
+  maxPayload: MAX_FRAME_SIZE,
+});
 
 wss.on('connection', (clientWs, req) => {
   const label = `[${req.socket.remoteAddress}]`;
   let isBaleMode = false;
   let handshakeDone = false;
   let lastIndex = 0;
-  let backendWs = null;
   let firstMessage = true;
+  let closed = false;
 
   vlog(`${label} New WS connection`);
 
   // Connect to backend proxy (Xray/SingBox)
-  backendWs = new WebSocket(BACKEND);
+  const backendWs = new WebSocket(BACKEND, { maxPayload: MAX_FRAME_SIZE });
+
+  // Idle-connection safety: any direction must send within IDLE_TIMEOUT_MS.
+  let idleTimer = null;
+  const resetIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (closed) return;
+      vlog(`${label} idle timeout, closing`);
+      closeBoth();
+    }, IDLE_TIMEOUT_MS);
+  };
+  resetIdle();
+
+  const closeBoth = () => {
+    if (closed) return;
+    closed = true;
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    try { clientWs.close(); } catch (_) { /* ignore */ }
+    try { backendWs.close(); } catch (_) { /* ignore */ }
+  };
 
   backendWs.on('open', () => {
     vlog(`${label} Backend connected`);
@@ -229,18 +359,25 @@ wss.on('connection', (clientWs, req) => {
 
   backendWs.on('error', (err) => {
     console.error(`${label} Backend error: ${err.message}`);
-    clientWs.close();
+    closeBoth();
   });
 
   backendWs.on('close', () => {
     vlog(`${label} Backend closed`);
-    clientWs.close();
+    closeBoth();
   });
 
   // BACKEND → CLIENT
   backendWs.on('message', (data) => {
+    if (closed) return;
+    resetIdle();
     try {
       if (isBaleMode) {
+        if (data.length > MAX_PAYLOAD_SIZE) {
+          console.error(`${label} backend payload > MAX_PAYLOAD_SIZE, closing`);
+          closeBoth();
+          return;
+        }
         const padded = addPadding(data);
         let wrapped;
         if (lastIndex > 0 && Math.random() > 0.3) {
@@ -248,19 +385,21 @@ wss.on('connection', (clientWs, req) => {
         } else {
           wrapped = encodeUpdateEnvelope(padded);
         }
-        clientWs.send(wrapped);
+        if (!safeSend(clientWs, wrapped, `${label} backend→client`)) closeBoth();
       } else {
-        clientWs.send(data);
+        if (!safeSend(clientWs, data, `${label} backend→client (legacy)`)) closeBoth();
       }
     } catch (err) {
       console.error(`${label} Backend→client error: ${err.message}`);
+      closeBoth();
     }
   });
 
   // CLIENT → BACKEND
   clientWs.on('message', (data) => {
+    if (closed) return;
+    resetIdle();
     try {
-      // Auto-detect Bale mode on first message
       if (firstMessage) {
         firstMessage = false;
         try {
@@ -268,7 +407,7 @@ wss.on('connection', (clientWs, req) => {
           if (env.type === 'handshake') {
             isBaleMode = true;
             console.log(`${label} Bale mode detected`);
-            clientWs.send(encodeHandshakeResponse());
+            safeSend(clientWs, encodeHandshakeResponse(), `${label} handshake`);
             handshakeDone = true;
             return;
           }
@@ -282,47 +421,51 @@ wss.on('connection', (clientWs, req) => {
         switch (env.type) {
           case 'request': {
             if (!handshakeDone) break;
-            const req = decodeRequest(env.request);
-            lastIndex = req.index;
-            if (req.payload) {
-              const clean = stripPadding(req.payload);
-              if (backendWs.readyState === WebSocket.OPEN) {
-                backendWs.send(clean);
+            const reqMsg = decodeRequest(env.request);
+            lastIndex = reqMsg.index;
+            if (reqMsg.payload) {
+              const clean = stripPadding(reqMsg.payload);
+              if (clean.length > MAX_PAYLOAD_SIZE) {
+                console.error(`${label} payload > MAX_PAYLOAD_SIZE after strip, closing`);
+                closeBoth();
+                return;
               }
+              if (!safeSend(backendWs, clean, `${label} client→backend`)) closeBoth();
             }
             break;
           }
           case 'ping': {
             const ping = decodePing(env.ping);
-            clientWs.send(encodePong(ping.id));
+            safeSend(clientWs, encodePong(ping.id), `${label} pong`);
             break;
           }
           case 'handshake': {
-            // Late handshake — respond
-            clientWs.send(encodeHandshakeResponse());
+            safeSend(clientWs, encodeHandshakeResponse(), `${label} late-handshake`);
             handshakeDone = true;
             break;
           }
+          default:
+            // Unknown envelope type — ignore quietly, matches real Bale servers.
+            break;
         }
       } else {
         // Legacy: pass through raw
-        if (backendWs.readyState === WebSocket.OPEN) {
-          backendWs.send(data);
-        }
+        if (!safeSend(backendWs, data, `${label} client→backend (legacy)`)) closeBoth();
       }
     } catch (err) {
       console.error(`${label} Client→backend error: ${err.message}`);
+      closeBoth();
     }
   });
 
   clientWs.on('close', () => {
     vlog(`${label} Client closed`);
-    if (backendWs) backendWs.close();
+    closeBoth();
   });
 
   clientWs.on('error', (err) => {
     console.error(`${label} Client error: ${err.message}`);
-    if (backendWs) backendWs.close();
+    closeBoth();
   });
 });
 
@@ -332,13 +475,25 @@ server.listen(PORT, () => {
   console.log('  Mithra · bale-unwrapper');
   console.log('  Server-side Bale protobuf decoder');
   console.log('═══════════════════════════════════════════════════');
-  console.log(`  Listen:   0.0.0.0:${PORT}`);
-  console.log(`  Backend:  ${BACKEND}`);
-  console.log(`  Path:     ${BACKEND_PATH}`);
-  console.log('  Mode:     Auto-detect (Bale / Legacy)');
+  console.log(`  Listen:        0.0.0.0:${PORT}`);
+  console.log(`  Backend:       ${BACKEND}`);
+  console.log(`  Path:          ${BACKEND_PATH}`);
+  console.log(`  Idle timeout:  ${IDLE_TIMEOUT_MS} ms`);
+  console.log(`  Max payload:   ${MAX_PAYLOAD_SIZE} bytes`);
+  console.log('  Mode:          Auto-detect (Bale / Legacy)');
   console.log('═══════════════════════════════════════════════════');
   console.log('');
 });
+
+// Graceful shutdown for container orchestrators (Docker, k8s).
+function shutdown(signal) {
+  console.log(`Received ${signal}, shutting down`);
+  wss.close();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 5000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 function vlog(...args) {
   if (VERBOSE) console.log(...args);
