@@ -52,13 +52,11 @@ func TestPbReaderVarint(t *testing.T) {
 }
 
 func TestHandshakeRoundTrip(t *testing.T) {
-	// Encode a handshake request
 	hsReq := EncodeHandshakeRequest()
 	if len(hsReq) == 0 {
 		t.Fatal("EncodeHandshakeRequest produced empty output")
 	}
 
-	// Decode it as a ClientEnvelope
 	env, err := DecodeClientEnvelope(hsReq)
 	if err != nil {
 		t.Fatalf("DecodeClientEnvelope error: %v", err)
@@ -70,13 +68,11 @@ func TestHandshakeRoundTrip(t *testing.T) {
 		t.Fatal("HandshakeRequest is nil")
 	}
 
-	// Encode a handshake response
 	hsResp := EncodeHandshakeResponse()
 	if len(hsResp) == 0 {
 		t.Fatal("EncodeHandshakeResponse produced empty output")
 	}
 
-	// Decode it as a ServerEnvelope
 	senv, err := DecodeServerEnvelope(hsResp)
 	if err != nil {
 		t.Fatalf("DecodeServerEnvelope error: %v", err)
@@ -87,7 +83,6 @@ func TestHandshakeRoundTrip(t *testing.T) {
 }
 
 func TestPingPongRoundTrip(t *testing.T) {
-	// Encode ping
 	ping := EncodePing(42)
 	env, err := DecodeClientEnvelope(ping)
 	if err != nil {
@@ -104,7 +99,6 @@ func TestPingPongRoundTrip(t *testing.T) {
 		t.Errorf("Ping ID = %d, want 42", id)
 	}
 
-	// Encode pong
 	pong := EncodePong(42)
 	senv, err := DecodeServerEnvelope(pong)
 	if err != nil {
@@ -116,16 +110,13 @@ func TestPingPongRoundTrip(t *testing.T) {
 }
 
 func TestWrapUnwrapTunnelData(t *testing.T) {
-	// Simulate VLESS tunnel data
 	tunnelData := []byte("VLESS tunnel payload with binary \x00\xFE\xFF data")
 
-	// Wrap on client side
 	wrapped := WrapTunnelData(tunnelData, 1)
 	if len(wrapped) == 0 {
 		t.Fatal("WrapTunnelData produced empty output")
 	}
 
-	// Decode as ClientEnvelope (what the Worker does)
 	env, err := DecodeClientEnvelope(wrapped)
 	if err != nil {
 		t.Fatalf("DecodeClientEnvelope error: %v", err)
@@ -134,18 +125,15 @@ func TestWrapUnwrapTunnelData(t *testing.T) {
 		t.Fatalf("Expected type 'request', got '%s'", env.Type)
 	}
 
-	// Decode the Request inside
 	req, err := DecodeRequest(env.Request)
 	if err != nil {
 		t.Fatalf("DecodeRequest error: %v", err)
 	}
 
-	// Verify service/method are from Bale's list
 	if req.ServiceName != Services[1%len(Services)] {
 		t.Errorf("ServiceName = '%s', expected '%s'", req.ServiceName, Services[1%len(Services)])
 	}
 
-	// Strip padding to get original data
 	clean := StripPadding(req.Payload)
 	if !bytes.Equal(clean, tunnelData) {
 		t.Errorf("Round-trip data mismatch:\n  got:  %x\n  want: %x", clean, tunnelData)
@@ -156,7 +144,6 @@ func TestResponseRoundTrip(t *testing.T) {
 	tunnelData := []byte("response tunnel data with \x00\xFE bytes")
 	padded := AddPadding(tunnelData)
 
-	// Encode as Response
 	respEnv := EncodeResponseEnvelope(padded, 7)
 	senv, err := DecodeServerEnvelope(respEnv)
 	if err != nil {
@@ -200,8 +187,9 @@ func TestUpdateRoundTrip(t *testing.T) {
 }
 
 func TestPaddingScheme(t *testing.T) {
-	// Test with various data sizes
-	testSizes := []int{0, 1, 10, 49, 50, 100, 499, 500, 1000, 4095, 4096, 10000, 65535}
+	// Includes sizes around the former uint16 cliff (65535/65536/65537) to
+	// confirm the uint32 prefix handles them correctly.
+	testSizes := []int{0, 1, 10, 49, 50, 100, 499, 500, 1000, 4095, 4096, 10000, 65535, 65536, 65537, 131072, 1000000}
 
 	for _, size := range testSizes {
 		data := make([]byte, size)
@@ -211,25 +199,22 @@ func TestPaddingScheme(t *testing.T) {
 
 		padded := AddPadding(data)
 
-		// Verify length prefix
-		if len(padded) < 2 {
+		if len(padded) < paddingLenPrefix {
 			t.Errorf("size %d: padded too short (%d)", size, len(padded))
 			continue
 		}
-		storedLen := int(binary.BigEndian.Uint16(padded[0:2]))
+		storedLen := int(binary.BigEndian.Uint32(padded[0:paddingLenPrefix]))
 		if storedLen != size {
 			t.Errorf("size %d: stored length = %d", size, storedLen)
 		}
 
-		// Strip and verify
 		clean := StripPadding(padded)
 		if !bytes.Equal(clean, data) {
 			t.Errorf("size %d: padding round-trip failed", size)
 		}
 
-		// Verify padded is larger or equal
-		if len(padded) < size+2 {
-			t.Errorf("size %d: padded (%d) smaller than data+2 (%d)", size, len(padded), size+2)
+		if len(padded) < size+paddingLenPrefix {
+			t.Errorf("size %d: padded (%d) smaller than data+%d (%d)", size, len(padded), paddingLenPrefix, size+paddingLenPrefix)
 		}
 	}
 }
@@ -239,7 +224,7 @@ func TestPaddingWithFEBytes(t *testing.T) {
 	// This is why we use length-prefix instead of 0xFE marker.
 	data := make([]byte, 100)
 	for i := range data {
-		data[i] = 0xFE // all 0xFE
+		data[i] = 0xFE
 	}
 
 	padded := AddPadding(data)
@@ -247,6 +232,25 @@ func TestPaddingWithFEBytes(t *testing.T) {
 
 	if !bytes.Equal(clean, data) {
 		t.Error("Data containing 0xFE bytes corrupted by padding round-trip")
+	}
+}
+
+func TestPaddingLargePayload(t *testing.T) {
+	// 100 KB — well beyond the former uint16 cap of 65 KB.
+	size := 100 * 1024
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i * 7 % 256)
+	}
+
+	padded := AddPadding(data)
+	clean := StripPadding(padded)
+
+	if len(clean) != size {
+		t.Fatalf("Large payload length mismatch: got %d, want %d", len(clean), size)
+	}
+	if !bytes.Equal(clean, data) {
+		t.Error("Large payload (100 KB) corrupted by padding round-trip")
 	}
 }
 
@@ -262,25 +266,48 @@ func TestStripPaddingInvalidInput(t *testing.T) {
 		t.Error("Expected passthrough for 1-byte input")
 	}
 
-	// Length exceeds buffer — should return as-is
-	bad := []byte{0xFF, 0xFF, 0x01} // claims 65535 bytes, only has 1
+	// Length exceeds buffer — should return as-is (4-byte prefix claims 2^32-1 bytes)
+	bad := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0x01}
 	result = StripPadding(bad)
 	if !bytes.Equal(result, bad) {
 		t.Error("Expected passthrough for invalid length prefix")
 	}
 }
 
+func TestWrapTunnelDataOversize(t *testing.T) {
+	// Payload larger than MaxPayloadSize must be truncated (not corrupt the stream).
+	oversize := make([]byte, MaxPayloadSize+1000)
+	for i := range oversize {
+		oversize[i] = byte(i % 256)
+	}
+
+	wrapped := WrapTunnelData(oversize, 0)
+
+	env, err := DecodeClientEnvelope(wrapped)
+	if err != nil {
+		t.Fatalf("DecodeClientEnvelope error: %v", err)
+	}
+	req, err := DecodeRequest(env.Request)
+	if err != nil {
+		t.Fatalf("DecodeRequest error: %v", err)
+	}
+	clean := StripPadding(req.Payload)
+	if len(clean) != MaxPayloadSize {
+		t.Errorf("Oversize payload not truncated to MaxPayloadSize: got %d, want %d", len(clean), MaxPayloadSize)
+	}
+	if !bytes.Equal(clean, oversize[:MaxPayloadSize]) {
+		t.Error("Truncated payload content mismatch")
+	}
+}
+
 func TestFullClientToServerPipeline(t *testing.T) {
-	// Simulate the complete flow: client wrap → Worker unwrap → backend
-	originalData := make([]byte, 1500) // typical MTU-sized payload
+	originalData := make([]byte, 1500)
 	for i := range originalData {
 		originalData[i] = byte(i % 256)
 	}
 
-	// Client wraps
 	wrapped := WrapTunnelData(originalData, 5)
 
-	// Worker decodes ClientEnvelope
 	cenv, err := DecodeClientEnvelope(wrapped)
 	if err != nil {
 		t.Fatalf("Worker: DecodeClientEnvelope: %v", err)
@@ -289,7 +316,6 @@ func TestFullClientToServerPipeline(t *testing.T) {
 		t.Fatalf("Worker: expected request, got %s", cenv.Type)
 	}
 
-	// Worker decodes Request, strips padding
 	req, err := DecodeRequest(cenv.Request)
 	if err != nil {
 		t.Fatalf("Worker: DecodeRequest: %v", err)
@@ -300,12 +326,10 @@ func TestFullClientToServerPipeline(t *testing.T) {
 		t.Error("Full pipeline: data corrupted")
 	}
 
-	// Worker wraps response for client
 	responseData := []byte("HTTP/1.1 200 OK\r\n\r\nHello")
 	padded := AddPadding(responseData)
 	respEnv := EncodeResponseEnvelope(padded, req.Index)
 
-	// Client decodes ServerEnvelope
 	senv, err := DecodeServerEnvelope(respEnv)
 	if err != nil {
 		t.Fatalf("Client: DecodeServerEnvelope: %v", err)
