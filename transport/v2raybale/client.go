@@ -226,7 +226,7 @@ select { case <-time.After(25*time.Second + j): case <-c.done: return }
 }
 }
 
-// === PROTOBUF CODEC ===
+// PROTOBUF CODEC
 var svcs = []string{"bale.v1.Configs","bale.users.v1.Users","bale.auth.v1.Auth","bale.fanoos.v1.fanoos","bale.feedback.v1.FeedBack","bale.ramz.v1.Ramz","bale.report.v1.Report","ai.bale.pushak.Push"}
 var mths = []string{"GetParameters","GetContacts","LoadUsers","SearchContacts","ImportContacts","Send"}
 
