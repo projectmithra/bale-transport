@@ -132,7 +132,7 @@ bash scripts/build-all.sh
 
 ## Security
 
-The Bale protobuf codec was reconstructed from Bale's production JavaScript client. The padding scheme uses deterministic length-prefix encoding (`uint16_be` + data + random) — not marker-byte scanning — to prevent data corruption from payload bytes colliding with the padding delimiter.
+The Bale protobuf codec was reconstructed from Bale's production JavaScript client. The padding scheme uses deterministic length-prefix encoding (`uint32_be` + data + crypto-random bytes) — not marker-byte scanning — to prevent data corruption from payload bytes colliding with a padding delimiter. The 4-byte length prefix supports payloads up to 4 GiB (caller-enforced cap is 4 MiB via `bale.MaxPayloadSize`). Padding content is drawn from `crypto/rand` so it resists statistical analysis on the padding bytes themselves.
 
 ## License
 
