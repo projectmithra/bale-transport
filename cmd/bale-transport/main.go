@@ -46,12 +46,9 @@ func main() {
 	}
 
 	fmt.Println("")
-	fmt.Println("═══════════════════════════════════════════════════")
 	fmt.Println("  Mithra · Bale Transport Proxy")
-	fmt.Println("═══════════════════════════════════════════════════")
 	fmt.Printf("  Listen: %s\n", *listenAddr)
 	fmt.Printf("  Worker: %s\n", *workerURL)
-	fmt.Println("═══════════════════════════════════════════════════")
 	fmt.Println("")
 
 	for {
@@ -64,9 +61,7 @@ func main() {
 	}
 }
 
-// ============================================================
 // SESSION
-// ============================================================
 
 type Session struct {
 	tcp           net.Conn
@@ -163,9 +158,7 @@ func (s *Session) cleanup() {
 	logf("%s Connection closed", s.label)
 }
 
-// ============================================================
 // WS READ LOOP
-// ============================================================
 
 func (s *Session) wsReadLoop() {
 	defer s.cleanup()
@@ -246,9 +239,7 @@ func (s *Session) wsReadLoop() {
 	}
 }
 
-// ============================================================
 // TCP READ LOOP
-// ============================================================
 
 func (s *Session) tcpReadLoop() {
 	buf := make([]byte, 32*1024)
@@ -283,9 +274,7 @@ func (s *Session) tcpReadLoop() {
 	}
 }
 
-// ============================================================
 // KEEPALIVE
-// ============================================================
 
 func (s *Session) keepaliveLoop() {
 	done := make(chan struct{})
