@@ -22,7 +22,7 @@ These layers are independent — the routing disguise and the content disguise s
 User's Proxy Client (Hiddify / V2RayNG / Nekobox / Outline)
   │ plain TCP
   ▼
-Bale Transport (native SingBox transport via patches)
+Bale Transport (standalone binary or native SingBox transport)
   │ WSS with Bale protobuf to CDN edge
   ▼
 CDN Edge Relay (see cloudflare-worker repo)
@@ -35,6 +35,22 @@ Xray / SingBox Server → Open Internet
 ```
 
 ## Quick Start
+
+### Standalone Binary
+
+The standalone binary accepts local TCP connections and wraps them in Bale protobuf over WebSocket. Works with any proxy client (V2Box, V2RayNG, Hiddify, Outline) without recompiling SingBox.
+
+```bash
+# Build
+go build -o bale-transport ./cmd/bale-transport/
+
+# Run
+./bale-transport -worker wss://your-worker.example.com/w -v
+
+# Configure your proxy client to connect to 127.0.0.1:1984
+```
+
+See [examples/singbox-with-standalone.json](examples/singbox-with-standalone.json) for a sample config.
 
 ### Native SingBox Transport
 
@@ -61,6 +77,9 @@ For the CDN edge relay, see the [`cloudflare-worker`](https://github.com/project
 
 ```
 bale-transport/
+├── cmd/
+│   └── bale-transport/
+│       └── main.go                # Standalone TCP→Bale proxy binary
 ├── bale/                          # Core protobuf codec (Go package)
 │   ├── proto.go                   # Encoder/decoder + padding
 │   ├── proto_test.go              # Comprehensive tests
@@ -97,6 +116,7 @@ bale-transport/
 | Tool | Integration | Effort |
 |------|------------|--------|
 | Hiddify / SingBox | Native transport: `"type": "bale"` | PR merge + rebuild |
+| V2RayNG / V2Box / Outline | Standalone binary + proxy config | Binary + config |
 | Self-hosted | SingBox patches + server unwrapper | Patches + server |
 
 ## What DPI Sees
@@ -128,6 +148,9 @@ go test ./bale/ -v -bench=.
 ```bash
 # Build all components
 bash scripts/build-all.sh
+
+# Or build standalone binary only
+go build -o bale-transport ./cmd/bale-transport/
 ```
 
 ## Security
