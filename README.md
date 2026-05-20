@@ -8,7 +8,7 @@ Part of [Project Mithra](https://github.com/projectmithra) — infrastructure mi
 
 ---
 
-> ### ⚠️ Deployment Status — May 2026
+> ### Deployment Status — May 2026
 >
 > **This transport was developed and field-tested during Iran's 2026 internet shutdown.** The Bale protocol mimicry layer is fully functional — connections that reach the CDN edge successfully tunnel traffic through DPI. However, Iran's current filtering environment limits end-to-end deployment:
 >
