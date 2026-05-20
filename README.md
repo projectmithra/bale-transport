@@ -6,6 +6,30 @@ Wraps tunnel traffic inside [Bale messenger](https://bale.ai)'s exact protobuf w
 
 Part of [Project Mithra](https://github.com/projectmithra) — infrastructure mimicry for the circumvention ecosystem.
 
+---
+
+> ### ⚠️ Deployment Status — May 2026
+>
+> **This transport was developed and field-tested during Iran's 2026 internet shutdown.** The Bale protocol mimicry layer is fully functional — connections that reach the CDN edge successfully tunnel traffic through DPI. However, Iran's current filtering environment limits end-to-end deployment:
+>
+> - **TCI (fixed-line):** Enforces a Layer 3 IP whitelist that blocks all Cloudflare IP ranges. The CDN routing layer cannot currently reach TCI home internet users.
+> - **MCI (mobile):** Shows intermittent Cloudflare connectivity but with aggressive DPI throttling that terminates sustained WebSocket connections within approximately 2 minutes.
+>
+> **What works today:**
+> - The Bale protobuf codec, standalone binary, and SingBox transport are fully functional and tested
+> - The protocol mimicry layer passes DPI inspection on connections that reach the CDN edge
+> - The server-side unwrapper and Docker deployment are production-ready
+> - The [`open-ip-lane`](https://github.com/projectmithra/open-ip-lane) scanning methodology correctly identifies reachable infrastructure per ISP and filtering regime
+>
+> **What this repository provides regardless of current conditions:**
+> - A complete, tested reference implementation of domestic messenger protocol mimicry for censorship circumvention research
+> - A working transport deployable immediately if/when Cloudflare connectivity is restored or alternative CDN paths are discovered
+> - Documentation of Bale's protobuf wire format, handshake sequence, keepalive behavior, and frame padding — saving other researchers months of reverse engineering
+>
+> The Project Mithra team is actively researching alternative transport paths. Community contributions are welcome, especially from researchers with insight into CDN routing, ISP-specific filtering behaviors, or additional domestic protocol targets.
+
+---
+
 ## How It Works
 
 Two independent evasion layers:
