@@ -31,10 +31,8 @@ const MAX_FRAME_SIZE = parseInt(process.env.MAX_FRAME_SIZE || '16777216', 10); /
 
 const PADDING_PREFIX = 4; // 4-byte uint32 big-endian length header
 
-// 
 // PROTOBUF CODEC (matches Go bale/ package exactly)
-// 
-
+ 
 class PbReader {
   constructor(buf) {
     this.buf = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
@@ -149,11 +147,9 @@ class PbWriter {
   }
 }
 
-// 
 // PADDING — 4-byte length prefix, crypto-random padding bytes
 // (unified with Go client and Cloudflare Worker)
-// 
-
+ 
 function addPadding(data, prefixSize) {
   if (prefixSize === undefined) prefixSize = PADDING_PREFIX;
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -198,9 +194,7 @@ function stripPadding(data) {
   return { clean: buf, prefixSize: 4 };
 }
 
-// 
-// ENVELOPE DECODE / ENCODE
-// 
+// ENVELOPE DECODE / ENCODE 
 
 function decodeClientEnvelope(buffer) {
   const r = new PbReader(buffer);
@@ -285,9 +279,7 @@ function encodeUpdateEnvelope(data) {
   return w.finish();
 }
 
-// 
-// SEND HELPERS — apply backpressure and size limits
-// 
+// SEND HELPERS — apply backpressure and size limits 
 
 function safeSend(socket, data, label) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -304,10 +296,8 @@ function safeSend(socket, data, label) {
     return false;
   }
 }
-
-// 
-// SERVER
-// 
+ 
+// SERVER 
 
 const server = http.createServer((req, res) => {
   // Active-probing response: mimic Bale's public-facing HTTP response.
