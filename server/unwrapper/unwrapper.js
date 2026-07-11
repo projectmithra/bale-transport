@@ -154,7 +154,8 @@ class PbWriter {
 // (unified with Go client and Cloudflare Worker)
 // 
 
-function addPadding(data) {
+function addPadding(data, prefixSize) {
+  if (prefixSize === undefined) prefixSize = PADDING_PREFIX;
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
   const dataLen = buf.length;
   if (dataLen > MAX_PAYLOAD_SIZE) {
@@ -169,21 +170,32 @@ function addPadding(data) {
   if (targetSize < dataLen) targetSize = dataLen;
 
   const paddingLen = targetSize - dataLen;
-  const result = Buffer.alloc(PADDING_PREFIX + dataLen + paddingLen);
-  result.writeUInt32BE(dataLen, 0);
-  buf.copy(result, PADDING_PREFIX);
+  const result = Buffer.alloc(prefixSize + dataLen + paddingLen);
+  if (prefixSize === 4) {
+    result.writeUInt32BE(dataLen, 0);
+  } else {
+    result.writeUInt16BE(dataLen, 0);
+  }
+  buf.copy(result, prefixSize);
   if (paddingLen > 0) {
-    crypto.randomFillSync(result, PADDING_PREFIX + dataLen, paddingLen);
+    crypto.randomFillSync(result, prefixSize + dataLen, paddingLen);
   }
   return result;
 }
 
 function stripPadding(data) {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  if (buf.length < PADDING_PREFIX) return buf;
-  const realLen = buf.readUInt32BE(0);
-  if (realLen + PADDING_PREFIX > buf.length) return buf;
-  return buf.slice(PADDING_PREFIX, PADDING_PREFIX + realLen);
+  if (buf.length < 4) return { clean: buf, prefixSize: 4 };
+  const len4 = buf.readUInt32BE(0);
+  const len2 = buf.readUInt16BE(0);
+  // 4-byte prefix: first 2 bytes are 0x00 0x00 for payloads < 65535
+  if (len4 > 0 && len4 + 4 <= buf.length && buf[0] === 0 && buf[1] === 0) {
+    return { clean: buf.slice(4, 4 + len4), prefixSize: 4 };
+  }
+  if (len2 > 0 && len2 + 2 <= buf.length) {
+    return { clean: buf.slice(2, 2 + len2), prefixSize: 2 };
+  }
+  return { clean: buf, prefixSize: 4 };
 }
 
 // 
@@ -327,6 +339,7 @@ wss.on('connection', (clientWs, req) => {
   let lastIndex = 0;
   let firstMessage = true;
   let closed = false;
+  let clientPaddingSize = 4; // Auto-detected from first Bale message
 
   vlog(`${label} New WS connection`);
 
@@ -378,7 +391,7 @@ wss.on('connection', (clientWs, req) => {
           closeBoth();
           return;
         }
-        const padded = addPadding(data);
+        const padded = addPadding(data, clientPaddingSize);
         let wrapped;
         if (lastIndex > 0 && Math.random() > 0.3) {
           wrapped = encodeResponseEnvelope(padded, lastIndex);
@@ -424,7 +437,8 @@ wss.on('connection', (clientWs, req) => {
             const reqMsg = decodeRequest(env.request);
             lastIndex = reqMsg.index;
             if (reqMsg.payload) {
-              const clean = stripPadding(reqMsg.payload);
+              const { clean, prefixSize: detectedSize } = stripPadding(reqMsg.payload);
+              clientPaddingSize = detectedSize;
               if (clean.length > MAX_PAYLOAD_SIZE) {
                 console.error(`${label} payload > MAX_PAYLOAD_SIZE after strip, closing`);
                 closeBoth();
