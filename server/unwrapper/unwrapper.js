@@ -31,8 +31,10 @@ const MAX_FRAME_SIZE = parseInt(process.env.MAX_FRAME_SIZE || '16777216', 10); /
 
 const PADDING_PREFIX = 4; // 4-byte uint32 big-endian length header
 
+// 
 // PROTOBUF CODEC (matches Go bale/ package exactly)
- 
+// 
+
 class PbReader {
   constructor(buf) {
     this.buf = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
@@ -147,11 +149,13 @@ class PbWriter {
   }
 }
 
+// 
 // PADDING — 4-byte length prefix, crypto-random padding bytes
 // (unified with Go client and Cloudflare Worker)
- 
+// 
+
 function addPadding(data, prefixSize) {
-  if (prefixSize === undefined) prefixSize = PADDING_PREFIX;
+  if (!prefixSize) prefixSize = PADDING_PREFIX;
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
   const dataLen = buf.length;
   if (dataLen > MAX_PAYLOAD_SIZE) {
@@ -179,22 +183,44 @@ function addPadding(data, prefixSize) {
   return result;
 }
 
-function stripPadding(data) {
+function detectPaddingSize(data) {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-  if (buf.length < 4) return { clean: buf, prefixSize: 4 };
+  if (buf.length < 4) return 2;
+  // Try 4-byte decode
   const len4 = buf.readUInt32BE(0);
+  if (len4 > 0 && len4 + 4 <= buf.length) {
+    const firstByte = buf[4];
+    // Valid VLESS/TLS first bytes after 4-byte strip
+    if (firstByte === 0x00 || (firstByte >= 0x14 && firstByte <= 0x17)) return 4;
+  }
+  // Try 2-byte decode
   const len2 = buf.readUInt16BE(0);
-  // 4-byte prefix: first 2 bytes are 0x00 0x00 for payloads < 65535
-  if (len4 > 0 && len4 + 4 <= buf.length && buf[0] === 0 && buf[1] === 0) {
-    return { clean: buf.slice(4, 4 + len4), prefixSize: 4 };
-  }
   if (len2 > 0 && len2 + 2 <= buf.length) {
-    return { clean: buf.slice(2, 2 + len2), prefixSize: 2 };
+    const firstByte = buf[2];
+    if (firstByte === 0x00 || (firstByte >= 0x14 && firstByte <= 0x17)) return 2;
   }
-  return { clean: buf, prefixSize: 4 };
+  // Fallback: if 2-byte gives valid length, use it
+  if (len2 > 0 && len2 + 2 <= buf.length) return 2;
+  if (len4 > 0 && len4 + 4 <= buf.length) return 4;
+  return 2;
 }
 
-// ENVELOPE DECODE / ENCODE 
+function stripPadding(data, prefixSize) {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  if (buf.length < prefixSize) return buf;
+  let realLen;
+  if (prefixSize === 4) {
+    realLen = buf.readUInt32BE(0);
+  } else {
+    realLen = buf.readUInt16BE(0);
+  }
+  if (realLen < 0 || realLen + prefixSize > buf.length) return buf;
+  return buf.slice(prefixSize, prefixSize + realLen);
+}
+
+// 
+// ENVELOPE DECODE / ENCODE
+// 
 
 function decodeClientEnvelope(buffer) {
   const r = new PbReader(buffer);
@@ -279,7 +305,9 @@ function encodeUpdateEnvelope(data) {
   return w.finish();
 }
 
-// SEND HELPERS — apply backpressure and size limits 
+// 
+// SEND HELPERS — apply backpressure and size limits
+// 
 
 function safeSend(socket, data, label) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
@@ -296,8 +324,10 @@ function safeSend(socket, data, label) {
     return false;
   }
 }
- 
-// SERVER 
+
+// 
+// SERVER
+// 
 
 const server = http.createServer((req, res) => {
   // Active-probing response: mimic Bale's public-facing HTTP response.
@@ -329,7 +359,7 @@ wss.on('connection', (clientWs, req) => {
   let lastIndex = 0;
   let firstMessage = true;
   let closed = false;
-  let clientPaddingSize = 4; // Auto-detected from first Bale message
+  let clientPaddingSize = 0; // 0 = not yet detected
 
   vlog(`${label} New WS connection`);
 
@@ -427,8 +457,11 @@ wss.on('connection', (clientWs, req) => {
             const reqMsg = decodeRequest(env.request);
             lastIndex = reqMsg.index;
             if (reqMsg.payload) {
-              const { clean, prefixSize: detectedSize } = stripPadding(reqMsg.payload);
-              clientPaddingSize = detectedSize;
+              if (clientPaddingSize === 0) {
+                clientPaddingSize = detectPaddingSize(reqMsg.payload);
+                console.log(`${label} Detected padding: ${clientPaddingSize}-byte`);
+              }
+              const clean = stripPadding(reqMsg.payload, clientPaddingSize);
               if (clean.length > MAX_PAYLOAD_SIZE) {
                 console.error(`${label} payload > MAX_PAYLOAD_SIZE after strip, closing`);
                 closeBoth();
