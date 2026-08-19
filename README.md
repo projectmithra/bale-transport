@@ -2,20 +2,20 @@
 
 **Protocol mimicry transport layer for censorship circumvention.**
 
-Wraps tunnel traffic inside [Bale messenger](https://bale.ai)'s exact protobuf wire format. DPI sees what looks like a legitimate Bale session — protobuf envelopes, real service names, proper handshake sequence, padded frame sizes, and Bale-timed keepalive pings.
+Wraps tunnel traffic inside [Bale messenger](https://bale.ai)'s exact protobuf wire format. DPI sees what looks like a legitimate Bale session - protobuf envelopes, real service names, proper handshake sequence, padded frame sizes, and Bale-timed keepalive pings.
 
-Part of [Project Mithra](https://github.com/projectmithra) — infrastructure mimicry for the circumvention ecosystem.
+Part of [Project Mithra](https://github.com/projectmithra) - infrastructure mimicry for the circumvention ecosystem.
 
 
 ## How It Works
 
 Two independent evasion layers:
 
-1. **Open IP Lane** (routing) — Traffic routes through Cloudflare IPs shared with whitelisted Iranian financial services. DPI sees traffic going to a financial service address. See [`open-ip-lane`](https://github.com/projectmithra/open-ip-lane) for the scanning methodology that discovers these IPs.
+1. **Open IP Lane** (routing) - Traffic routes through Cloudflare IPs shared with whitelisted Iranian financial services. DPI sees traffic going to a financial service address. See [`open-ip-lane`](https://github.com/projectmithra/open-ip-lane) for the scanning methodology that discovers these IPs.
 
-2. **Bale Protocol Mimicry** (content) — Every WebSocket frame is a valid Bale protobuf envelope. The connection begins with Bale's handshake, carries data inside `ClientEnvelope`/`ServerEnvelope` structures with real Bale gRPC service names, and maintains keepalive at Bale's exact interval.
+2. **Bale Protocol Mimicry** (content) - Every WebSocket frame is a valid Bale protobuf envelope. The connection begins with Bale's handshake, carries data inside `ClientEnvelope`/`ServerEnvelope` structures with real Bale gRPC service names, and maintains keepalive at Bale's exact interval.
 
-These layers are independent — the routing disguise and the content disguise solve different detection problems simultaneously.
+These layers are independent - the routing disguise and the content disguise solve different detection problems simultaneously.
 
 ## Architecture
 
