@@ -106,6 +106,10 @@ bale-transport/
 ├── scripts/                       # Build scripts
 │   └── build-all.sh
 ├── docs/                          # Integration guides
+│   └── farsi-guides/
+│       ├── SERVER-SETUP-FA.md      # راه‌اندازی سرور
+│       ├── CLIENT-SETUP-FA.md      # راه‌اندازی کلاینت
+│       └── INTEGRATION-GUIDE-FA.md # راهنمای اتصال اپلیکیشن‌ها
 │   └── SINGBOX-INTEGRATION.md
 ├── go.mod
 ├── LICENSE
