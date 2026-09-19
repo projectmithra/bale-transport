@@ -1,16 +1,16 @@
-# docker-compose.yml — Mithra server-side stack
+# docker-compose.yml - Mithra server-side stack
 #
 # Deploy with:
 #   docker compose up -d
 #
 # This runs:
-#   1. bale-unwrapper (port 80) — strips Bale protobuf
-#   2. xray (port 8443, internal only) — your proxy server
+#   1. bale-unwrapper (port 80) - strips Bale protobuf
+#   2. xray (port 8443, internal only) - your proxy server
 #
 # The Cloudflare Worker connects to port 80 on this host.
 # bale-unwrapper auto-detects Bale vs legacy connections.
 #
-# Note: the top-level `version:` key is intentionally omitted —
+# Note: the top-level `version:` key is intentionally omitted 
 # Docker Compose v2 ignores it and emits a deprecation warning.
 
 services:
@@ -45,7 +45,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./xray-config.json:/etc/xray/config.json:ro
-    # xray is not exposed to the host — only the unwrapper talks to it
+    # xray is not exposed to the host - only the unwrapper talks to it
     # over the internal `mithra` bridge network.
     networks:
       - mithra
