@@ -134,6 +134,11 @@ bale-transport/
 | Frame sizes | Padded to Bale distribution | ✓ |
 | Keepalive | Ping/Pong every ~25s ±3s | ✓ |
 
+
+## مستندات فارسی
+
+راهنمای راه‌اندازی سرور، کلاینت، و اتصال اپلیکیشن‌ها به زبان فارسی در [`docs/farsi-guides/`](docs/farsi-guides/) موجود است.
+
 ## Testing
 
 ```bash
